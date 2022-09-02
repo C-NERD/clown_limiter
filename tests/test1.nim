@@ -24,7 +24,7 @@ proc server() =
 
             resp (status : true, msg : "opt failed").toJson()
 
-        extend clown_limiter, "" ## can use extend second param to further restrict clown limiter to certain endpoints
+        extend clown_limiter, "" ## can use second param of extend to further restrict clown limiter to certain endpoints
 
     runForever()
 
@@ -64,6 +64,7 @@ suite "multithreaded test suite":
     test "testing rate limit for regex specified pattern":
 
         addLimiterEndpoints(@[(re"([/]|[A-z])+(.json)$", 50, 60)]) ## only limit endpoints ending with `.json`
+        ## and limit those endpoints by 50 rates per 60 seconds
         check: 
             not waitFor client()
             waitFor clientTwo()
