@@ -18,11 +18,9 @@ type
         ip* : string
         calls*, lastcalled* : int
 
-var 
-    ip_add_lock, rec_rate_lock, reset_rate_lock: Lock
-    RATE_LIMIT : int = 80 ## request rate. defaults to 80 api calls
-    LIMIT_FREQ : int = 60 ## request frequency in seconds. defaults to 60 seconds
+var ip_add_lock, rec_rate_lock, reset_rate_lock: Lock ## define locks for db write operations
 
+## initialize locks
 initLock(ip_add_lock)
 initLock(rec_rate_lock)
 initLock(reset_rate_lock)
@@ -41,18 +39,6 @@ db.exec(sql"""
         lastcalled INTEGER NOT NULL
     );
 """)
-
-proc setRate*(rate : int) =
-    ## sets request rate.
-    ## call this outside of threaded procedures
-    
-    RATE_LIMIT = rate
-
-proc setFreq*(freq : int) =
-    ## sets request frequency in seconds.
-    ## call this outside of threaded procedures
-    
-    LIMIT_FREQ = freq
 
 template log(level, msg : string) =
 
@@ -135,18 +121,18 @@ proc reqRate(ip : string) : RequestRate =
 
         addIpToReqRate(ip)
 
-proc rateStatus*(ip : string) : tuple[status : RateStatus, calls : int] =
+proc rateStatus*(ip : string, rate, freq : int) : tuple[status : RateStatus, calls : int] =
 
     let 
         req_rate = reqRate(ip)
         epoch = int(epochTime())
 
-    if req_rate.calls >= RATE_LIMIT and req_rate.lastcalled + LIMIT_FREQ >= epoch:
+    if req_rate.calls >= rate and req_rate.lastcalled + freq >= epoch:
         ## checks if ip has surpassed request limit
         
         return (Exceeded, req_rate.calls)
 
-    elif req_rate.lastcalled + LIMIT_FREQ < epoch:
+    elif req_rate.lastcalled + freq < epoch:
 
         return (Expired, req_rate.calls)
 
