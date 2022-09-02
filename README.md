@@ -1,4 +1,4 @@
-## Clown limiter
+### Clown limiter
 
 Jester plugin for api rate limiting. The plugin is built to work on single and multithreaded jester servers.
 
@@ -40,3 +40,9 @@ spawn server()
 sync()
 
 ```
+
+### Compiler flags
+
+-d:logClown enables logging of limiter related error messages to stdout
+
+-d:clearClown enables clearing of stale rate records. Interval for clearing records can be set with `setCleanerInterval`
