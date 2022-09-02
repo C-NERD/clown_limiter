@@ -1,12 +1,8 @@
-# To run these tests, simply execute `nimble test`.
+## To run these tests, simply execute `nimble test`.
 
 import unittest, httpclient, threadpool, clown_limiter, jester
 from std / jsonutils import toJson
 from strutils import contains
-
-setRate(50) ## set api request rate to 50 requests
-setFreq(60) ## set api rate frequency to 60 seconds
-## Avoid setting rate and frequency multiple times and in threaded procedures
 
 proc server() =
 
@@ -20,15 +16,15 @@ proc server() =
 
             resp "userpage"
 
-        post "/apiendpoint/json1":
+        post "/apiendpoint.json":
 
             resp (status : true, msg : "opt successful").toJson()
 
-        put "/apiendpoint/json2":
+        put "/apiendpoint.json":
 
             resp (status : true, msg : "opt failed").toJson()
 
-        extend clown_limiter, ""
+        extend clown_limiter, "" ## can use extend second param to further restrict clown limiter to certain endpoints
 
     runForever()
 
@@ -43,16 +39,31 @@ proc client() : Future[bool] {.async.} =
 
             return true
 
+proc clientTwo() : Future[bool] {.async.} =
+
+    let 
+        client = newAsyncHttpClient()
+        resp = await client.post("http://localhost:5000/apiendpoint.json")
+
+    if "429" in resp.status:
+
+        return true
+
 suite "multithreaded test suite":
 
-    setup:
-
-        echo "starting test server on 2 threads..."
-        spawn server()
-        spawn server()
+    echo "starting test server on 2 threads..."
+    spawn server()
+    spawn server()
 
     test "testing server for code 429 on surpassing api request rate":
 
         check:
 
             waitFor client()
+
+    test "testing rate limit for regex specified pattern":
+
+        addLimiterEndpoints(@[(re"([/]|[A-z])+(.json)$", 50, 60)]) ## only limit endpoints ending with `.json`
+        check: 
+            not waitFor client()
+            waitFor clientTwo()
