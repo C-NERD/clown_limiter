@@ -1,7 +1,7 @@
 ## Copyright (C) 2022 Cnerd
 ## MIT License - Look at license.txt for details.
 
-import db_sqlite, logging
+import db_sqlite, asyncdispatch, logging
 import std / exitprocs, locks
 from strutils import isEmptyOrWhitespace, parseInt, parseBool
 from times import epochTime
@@ -18,7 +18,11 @@ type
         ip* : string
         calls*, lastcalled* : int
 
-var ip_add_lock, rec_rate_lock, reset_rate_lock: Lock ## define locks for db write operations
+    IntervalError* = object of CatchableError
+
+var 
+    ip_add_lock, rec_rate_lock, reset_rate_lock: Lock ## define locks for db write operations
+    cleaner_interval : int = 7200 ## interval in seconds at which the cleaner will be called. defaults to 7200 seconds
 
 ## initialize locks
 initLock(ip_add_lock)
@@ -39,6 +43,16 @@ db.exec(sql"""
         lastcalled INTEGER NOT NULL
     );
 """)
+
+proc setCleanerInterval*(interval : int) {.raises : [IntervalError].} =
+    ## sets cleaner's interval in seconds
+    ## will raise error if interval is less than 3600 seconds
+    
+    if interval < 3600:
+
+        raise newException(IntervalError, "interval is less than 3600 seconds")
+
+    cleaner_interval = interval
 
 template log(level, msg : string) =
 
@@ -139,4 +153,26 @@ proc rateStatus*(ip : string, rate, freq : int) : tuple[status : RateStatus, cal
     else:
 
         return (NotExceeded, req_rate.calls)
+
+proc clean() {.async.} =
+    ## clear stale ip rate records
+    ## useful for keeping memory free expecially when application will be runned for a long time
+    ## only call when cleanClown is defined
+    
+    when defined(cleanClown):
+        
+        while true:
+
+            await sleepAsync(cleaner_interval * 1000)
+            safeOp:
+
+                for row in db.getAllRows(sql "SELECT ip FROM requestrate WHERE lastcalled < ?", epochTime().int - cleaner_interval):
+
+                    db.exec(sql "DELETE FROM requestrate WHERE ip = ?", row[0])
+
+    else:
+
+        discard
+
+asyncCheck clean()
 
