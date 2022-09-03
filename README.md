@@ -1,6 +1,6 @@
 ### Clown limiter
 
-Jester plugin for api rate limiting. The plugin is built to work on single and multithreaded jester servers.
+Jester plugin for api rate limiting. This plugin is built to work on single and multithreaded jester servers. This plugin makes use of a sqlite in memory instance, since this should not be bounded to the nim `gc` and the db's write operations are controlled by locks to prevent data corruption. This plugin is safe to be used in single and mutithreaded instances
 
 ### Example
 
