@@ -21,13 +21,11 @@ type
     IntervalError* = object of CatchableError
 
 var 
-    ip_add_lock, rec_rate_lock, reset_rate_lock: Lock ## define locks for db write operations
+    db_write_lock : Lock ## define lock for db write operations
     cleaner_interval : int = 7200 ## interval in seconds at which the cleaner will be called. defaults to 7200 seconds
 
 ## initialize locks
-initLock(ip_add_lock)
-initLock(rec_rate_lock)
-initLock(reset_rate_lock)
+initLock(db_write_lock)
 
 let 
     logger = newConsoleLogger(fmtStr = "$levelname -> ")
@@ -65,13 +63,21 @@ template log(level, msg : string) =
 
         logger.log(level, msg)
 
-template safeOp(body : untyped) =
+template safeOp(lock : bool, body : untyped) =
     ## template to avoid exception errors from Db operations
     ## use -d:logClown flag to enable logClown which will log exception errors to stdout
 
     try:
 
-        body
+        when lock:
+
+            withLock db_write_lock:
+
+                body
+
+        else:
+
+            body
     
     except DbError:
 
@@ -85,34 +91,27 @@ proc addIpToReqRate(ip : string) =
 
         return
     
-    ip_add_lock.acquire()
-    discard db.insertID(
-        sql"INSERT INTO requestrate (ip, calls, lastcalled) VALUES (?, ?, ?)", 
-        ip, 1, int(epochTime())
-    )
+    safeOp true:
 
-    ip_add_lock.release()
+        discard db.insertID(
+            sql"INSERT INTO requestrate (ip, calls, lastcalled) VALUES (?, ?, ?)", 
+            ip, 1, int(epochTime())
+        )
 
 proc recordReqRate*(ip : string, calls : int) =
     ## records new request call
 
-    safeOp:
+    safeOp true:
 
-        rec_rate_lock.acquire()
         db.exec(sql"UPDATE requestrate SET calls = ?, lastcalled = ? WHERE ip = ?", calls + 1, int(epochTime()), ip)
-
-        rec_rate_lock.release()
 
 proc resetReqRate*(ip : string) : RequestRate {.discardable.} = 
     ## resets request call for ip to 1
     
     let epoch = epochTime()
-    safeOp:
+    safeOp true:
 
-        reset_rate_lock.acquire()
         db.exec(sql"UPDATE requestrate SET calls = ?, lastcalled = ? WHERE ip = ?", 1, int(epoch), ip)
-
-        reset_rate_lock.release()
         return RequestRate(
             ip : ip,
             calls : 1,
@@ -122,7 +121,7 @@ proc resetReqRate*(ip : string) : RequestRate {.discardable.} =
 proc reqRate(ip : string) : RequestRate =
     ## gets requestrate data for ip
     
-    safeOp:
+    safeOp false:
 
         let row = db.getRow(sql"SELECT * FROM requestrate WHERE ip = ?", ip)
         if not row[0].isEmptyOrWhitespace():
@@ -164,7 +163,7 @@ proc clean() {.async.} =
         while true:
 
             await sleepAsync(cleaner_interval * 1000)
-            safeOp:
+            safeOp true:
 
                 for row in db.getAllRows(sql "SELECT ip FROM requestrate WHERE lastcalled < ?", epochTime().int - cleaner_interval):
 
