@@ -1,5 +1,5 @@
 # Copyright (C) 2022 Cnerd
-# MIT License - Look at license.txt for details.
+# MIT License - Look at LICENSE for details.
 ##[
     Jester plugin for api rate limiting. This plugin is built to work on single and multithreaded jester servers. 
     This plugin makes use of a sqlite in memory instance, since this should not be bounded to the nim `gc` 

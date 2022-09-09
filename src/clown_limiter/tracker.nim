@@ -1,5 +1,5 @@
 ## Copyright (C) 2022 Cnerd
-## MIT License - Look at license.txt for details.
+## MIT License - Look at LICENSE for details.
 
 import db_sqlite, asyncdispatch, logging
 import std / exitprocs, locks
