@@ -13,7 +13,7 @@ type
 
 var 
     write_lock : Lock
-    tracker : Table[string, tuple[calls, lastcalled : int]] ## to store ip address and number of calls made by address
+    tracker {.guard : write_lock.} : Table[string, tuple[calls, lastcalled : int]] ## to store ip address and number of calls made by address
     tracker_addr = addr(tracker)
 
 initLock(write_lock)
