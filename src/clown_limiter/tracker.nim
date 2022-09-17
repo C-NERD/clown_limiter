@@ -11,53 +11,65 @@ type
 
         NotExceeded Exceeded Expired
 
-    Tracker = object
+var 
+    write_lock : Lock
+    tracker : Table[string, tuple[calls, lastcalled : int]] ## to store ip address and number of calls made by address
+    tracker_addr = addr(tracker)
 
-        write_lock : Lock
-        ip_data {.guard : write_lock.} : Table[string, tuple[calls, lastcalled : int]] ## to store ip address and number of calls made by address
+initLock(write_lock)
 
-var tracker* {.global.} : Tracker
-initLock(tracker.write_lock)
+proc addIpToReqRate*(ip : string) {.gcsafe.} =
 
-proc addIpToReqRate*(ip : string) =
+    var ip_data {.guard : write_lock.} = cast[ref Table[string, tuple[calls, lastcalled : int]]](tracker_addr)
+    withLock write_lock:
 
-    withLock tracker.write_lock:
-
-        if ip in tracker.ip_data:
+        if ip in ip_data:
 
             return
 
-        tracker.ip_data[ip] = (calls : 1, lastcalled : int(epochTime()))
+        ip_data[ip] = (calls : 1, lastcalled : int(epochTime()))
 
-proc recordReqRate*(ip : string, calls : int) =
+proc recordReqRate*(ip : string, calls : int) {.gcsafe.} =
 
-    withLock tracker.write_lock:
+    var ip_data {.guard : write_lock.} = cast[ref Table[string, tuple[calls, lastcalled : int]]](tracker_addr)
+    withLock write_lock:
 
-        if ip in tracker.ip_data:
+        if ip in ip_data:
 
-            tracker.ip_data[ip].calls = calls + 1
-            tracker.ip_data[ip].lastcalled = int(epochTime())
+            ip_data[ip].calls = calls + 1
+            ip_data[ip].lastcalled = int(epochTime())
 
-proc resetReqRate*(ip : string) : tuple[calls, lastcalled : int] {.discardable.} =
+proc resetReqRate*(ip : string) : tuple[calls, lastcalled : int] {.discardable, gcsafe.} =
 
-    withLock tracker.write_lock:
+    var ip_data {.guard : write_lock.} = cast[ref Table[string, tuple[calls, lastcalled : int]]](tracker_addr)
+    withLock write_lock:
+        
+        if ip in ip_data:
 
-        if ip in tracker.ip_data:
+            ip_data[ip].calls = 1
+            ip_data[ip].lastcalled = int(epochTime())
 
-            tracker.ip_data[ip].calls = 1
-            tracker.ip_data[ip].lastcalled = int(epochTime())
+            return (calls : 1, lastcalled : ip_data[ip].lastcalled)
 
-            return (calls : 1, lastcalled : tracker.ip_data[ip].lastcalled)
-
-proc rateStatus*(ip : string, rate, freq : int) : tuple[status : RateStatus, calls : int] =
+proc rateStatus*(ip : string, rate, freq : int) : tuple[status : RateStatus, calls : int] {.gcsafe.} =
 
     let 
+        ip_data {.guard : write_lock.} = cast[ref Table[string, tuple[calls, lastcalled : int]]](tracker_addr)
         req_rate : tuple[calls, lastcalled : int] = block:
 
-            var req_rate : tuple[calls, lastcalled : int] = (1, 0)
-            withLock tracker.write_lock:
+            var 
+                req_rate : tuple[calls, lastcalled : int] = (1, 0)
+                addip : bool = true
+            withLock write_lock:
 
-                req_rate = tracker.ip_data[ip]
+                if ip in ip_data:
+
+                    addip = false
+                    req_rate = ip_data[ip]
+
+            if addip:
+
+                addIpToReqRate(ip)
 
             req_rate
 

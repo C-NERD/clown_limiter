@@ -96,7 +96,7 @@ router clown_limiter:
             let 
                 ip = request.ip()
                 rateinfo = ip.rateStatus(rate, freq)
-                    
+
             case rateinfo.status
 
             of Exceeded:
