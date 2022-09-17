@@ -1,6 +1,6 @@
 ### Clown limiter
 
-Jester plugin for api rate limiting. This plugin is built to work on single and multithreaded jester servers. This plugin makes use of a sqlite in memory instance, since this should not be bounded to the nim `gc` and the db's write operations are controlled by locks to prevent data corruption. This plugin is safe to be used in single and mutithreaded instances
+Jester plugin for api rate limiting. This plugin is built to work on single and multithreaded jester servers. This plugin implements to types of trackers to limit api rate. The first tracker makes use of locks and nim's `ref type` for gcsafe and corruption free rate limiting. While the other makes use of a sqlite in memory instance which is not bounded to the nim `gc` and the db's write operations are controlled by locks to prevent data corruption hence it is also gcsafe and corruption free. This plugin is safe to be used in single and mutithreaded instances
 
 ### Example
 
@@ -43,6 +43,13 @@ sync()
 
 ### Compiler flags
 
+-d:useSqliteTracker enables the use of in memory sqlite as tracker
+
 -d:logClown enables logging of limiter related error messages to stdout
 
 -d:clearClown enables clearing of stale rate records. Interval for clearing records can be set with `setCleanerInterval`
+
+#### Note :
+
+- The compiler flags will only take effect if `useSqliteTracker` is defined, because these flags are specific to the sqlitetracker.
+- If `useSqliteTracker` is not defined clown_limiter will use the new tracker in `src/clown_limiter/tracker` as the default
