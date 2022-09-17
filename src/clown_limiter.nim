@@ -45,8 +45,18 @@
         spawn server()
         sync()]##
 
-import jester, clown_limiter/tracker
+import jester
 from re import re, contains, Regex
+
+when not defined(useSqliteTracker):
+    ## when not specified to use in memory sqlite to store tracking data
+
+    import clown_limiter/tracker
+
+else:
+    ## when specified to use in memory sqlite to store tracking data
+
+    import clown_limiter/sqlitetracker
 
 export tracker, re
 
@@ -80,13 +90,13 @@ router clown_limiter:
                 rate = info.rate
                 freq = info.freq
                 break
-        
+
         if check_rate:
 
             let 
                 ip = request.ip()
                 rateinfo = ip.rateStatus(rate, freq)
-                
+                    
             case rateinfo.status
 
             of Exceeded:
@@ -100,4 +110,3 @@ router clown_limiter:
             of Expired:
 
                 ip.resetReqRate()
-
