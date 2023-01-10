@@ -53,3 +53,4 @@ sync()
 
 - The compiler flags will only take effect if `useSqliteTracker` is defined, because these flags are specific to the sqlitetracker.
 - If `useSqliteTracker` is not defined clown_limiter will use the new tracker in `src/clown_limiter/tracker` as the default
+- For version 0.3.0 upwards `useSqliteTracker` is now `useSqliteCounter` and the other 2 flags have been removed
