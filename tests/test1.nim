@@ -3,6 +3,7 @@
 
 import clown_limiter, jester
 import std / [unittest, httpclient, threadpool]
+from std / nre import re
 from std / jsonutils import toJson
 from std / strutils import contains
 from std / os import sleep
@@ -57,7 +58,7 @@ suite "multithreaded test suite":
 
     test "testing server for code 429 on surpassing api request rate":
 
-        addLimiterEndpoints((re "^/$", 51, 60))
+        addLimiterEndpoints((nre.re "^/$", 51, 60))
         check:
             
             waitFor client429("http://localhost:5000/", 52)
@@ -80,7 +81,7 @@ suite "multithreaded test suite":
 
     test "testing rate limit for regex specified pattern":
 
-        addLimiterEndpoints((re "([/]|[A-z])+(.json)$", 51, 60)) ## only limit endpoints ending with `.json`
+        addLimiterEndpoints((nre.re "([/]|[A-z])+(.json)$", 51, 60)) ## only limit endpoints ending with `.json`
         ## and limit those endpoints by 50 rates per 60 seconds
         check:
             
