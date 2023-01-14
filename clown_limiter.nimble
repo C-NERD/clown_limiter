@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.3.0"
+version       = "0.4.0"
 author        = "C-NERD"
 description   = "Jester rate limiter plugin"
 license       = "MIT"
