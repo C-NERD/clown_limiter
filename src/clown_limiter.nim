@@ -11,10 +11,11 @@
 
     .. code-block:: nim
         import threadpool, clown_limiter, jester
+        from std / nre import re
         from std / jsonutils import toJson
 
-        addLimiterEndpoints(@[(re"([/]|[A-z])+(.json)$", 50, 60)]) ## only limit endpoints ending with `.json`
-        ## and limit those endpoints by 50 rates per 60 seconds. Do not call this in a threaded proc
+        addLimiterEndpoints(@[(nre.re"^/$", 50, 60), (nre.re"([/]|[A-z])+(.json)$", 50, 60)]) ## only limit the endpoint '/' and 
+        ## endpoints ending with `.json` and limit those endpoints by 50 rates per 60 seconds. Do not call this in a threaded proc
 
         proc server() =
 
@@ -24,32 +25,21 @@
 
                     resp "home page"
 
-                get "/userpage":
-
-                    resp "userpage"
-
-                post "/apiendpoint.json":
+                get "/apiendpoint.json":
 
                     resp (status : true, msg : "opt successful").toJson()
 
-                put "/apiendpoint.json":
-
-                    resp (status : true, msg : "opt failed").toJson()
-
-                extend clown_limiter, "" ## can use second param of extend to further restrict clown limiter 
-                ## to certain endpoints
+                extend clown_limiter, "" ## can use second param of extend to further restrict clown limiter to certain endpoints
 
             runForever()
 
-        spawn server()
-        spawn server()
-        sync()
+        server()
 ]##
 
 import jester
 import clown_limiter / datatype
 import std / [locks, exitprocs]
-from std / nre import re, contains, Regex
+from std / nre import contains, Regex
 from std / sugar import `=>`
 from std / options import isSome, get, some
 from std / strformat import fmt
@@ -70,7 +60,7 @@ type
 
     LimitRule* = tuple[pattern : Regex, rate, freq : int]
 
-export datatype, locks, isSome, get, some, fmt, nre
+export datatype, locks, isSome, get, some, fmt, nre.contains
 
 var 
     ruleLock* : Lock
@@ -89,12 +79,17 @@ proc addLimiterEndpoints*(rules : seq[LimitRule]) {.gcsafe.} =
 
             var sortedRules : seq[LimitRule]
             for rule in rules:
-
+                
+                var duplicate : bool
                 for sortrule in sortedRules:
+                    
+                    if sortrule.pattern == rule.pattern:
 
-                    if sortrule.pattern != rule.pattern:
+                        duplicate = true
 
-                        sortedRules.add(sortrule)
+                if not duplicate:
+
+                    sortedRules.add(rule)
 
             clownLimiterDataDoNotTouch = sortedRules
 
@@ -120,6 +115,10 @@ proc addLimiterEndpoints*(rule : LimitRule) {.gcsafe.} =
             else:
 
                 clownLimiterDataDoNotTouch.add(rule)
+
+#[proc toRe(s: string, flags = {reStudy}) : re.Regex =  ## alias for re.re because jester macros do not accept DotExpr as params
+    
+    return re(s, flags)]#
 
 router clown_limiter:
 
@@ -172,6 +171,6 @@ router clown_limiter:
 
                 result.headers.get().add ("X-RateLimit-Limit", fmt"{rate}/{freq}s")
                 result.headers.get().add ("X-RateLimit-Remaining", $(rate - rateinfo.calls))
-                #result.headers.get().add ("X-RateLimit-Reset", $rateinfo.resetime)
+                result.headers.get().add ("X-RateLimit-Reset", $rateinfo.resetime)
 
         
