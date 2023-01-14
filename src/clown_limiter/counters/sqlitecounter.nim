@@ -29,12 +29,15 @@ addExitProc(() {.noconv.} => (
 
 ## create db schema
 db.exec(sql"""
-CREATE TABLE IF NOT EXISTS requestrate(
+CREATE TABLE IF NOT EXISTS ip(
     id INTEGER PRIMARY KEY,
-    ip VARCHAR(50) NOT NULL,
+    endpoint VARCHAR(30) NOT NULL,
+    address VARCHAR(30) NOT NULL,
     calls INTEGER NOT NULL,
+    cyclepoch INTEGER NOT NULL,
     lastcalled INTEGER NOT NULL
-);""")
+);"""
+)
 
 proc setCleanerInterval*(interval : int) {.raises : [IntervalError].} =
     ## sets cleaner's interval in seconds
@@ -46,77 +49,88 @@ proc setCleanerInterval*(interval : int) {.raises : [IntervalError].} =
 
     cleanerInterval = interval
 
-proc addIpToReqRate(ip : string) {.gcsafe.} =
-    ## creates new row on table requestrate if row with ip does not exist already
+proc addIpToReqRate(endpoint, ip : string) : tuple[calls, cyclepoch, lastcalled : int] {.gcsafe.} =
+    ## creates new row on table endpoint and table ip. If row with ip does not exist already
     
+    result.calls = 1
     withLock dbWriteLock:
 
-        if db.getValue(sql"SELECT EXISTS(SELECT NULL FROM requestrate WHERE ip = ?)", ip).parseBool():
+        if db.getValue(sql"SELECT EXISTS(SELECT NULL FROM ip WHERE endpoint = ? AND address = ?)", endpoint, ip).parseBool():
 
             return
 
-        discard db.insertID(
-            sql"INSERT INTO requestrate (ip, calls, lastcalled) VALUES (?, ?, ?)", 
-            ip, 1, int(epochTime())
-        )
+        let epoch = int(epochTime())
+        discard db.insertID(sql "INSERT INTO ip (endpoint, address, calls, cyclepoch, lastcalled) VALUES (?, ?, ?, ?, ?);", 
+            endpoint, ip, 1, epoch, epoch)
 
-proc recordReqRate*(ip : string, calls : int) =
+        result = (1, epoch, epoch)                
+
+proc recordReqRate*(endpoint, ip : string, calls : int) =
     ## records new request call
 
     withLock dbWriteLock:
 
-        db.exec(
-            sql"UPDATE requestrate SET calls = ?, lastcalled = ? WHERE ip = ?", 
-            calls + 1, int(epochTime()), ip
-        )
+        if db.getValue(sql"SELECT EXISTS(SELECT NULL FROM ip WHERE endpoint = ? AND address = ?)", endpoint, ip).parseBool():
 
-proc resetReqRate*(ip : string) : RequestRate {.discardable.} = 
-    ## resets request call for ip to 1
-    
-    let epoch = epochTime()
-    withLock dbWriteLock:
+            let epoch = int(epochTime())
+            db.exec(sql "UPDATE ip SET calls = ?, lastcalled = ? WHERE address = ?", calls + 1, epoch, ip)
 
-        db.exec(sql"UPDATE requestrate SET calls = ?, lastcalled = ? WHERE ip = ?", 1, int(epoch), ip)
-        return RequestRate(
-            ip : ip,
-            calls : 1,
-            lastcalled : int(epoch)
-        )
-
-proc reqRate(ip : string) : RequestRate =
-    ## gets requestrate data for ip
+proc resetReqRate*(endpoint, ip : string) : tuple[calls, cyclepoch, lastcalled : int] {.discardable.} = 
+    ## resets request call for ip to 2
     
     withLock dbWriteLock:
 
-        let row = db.getRow(sql"SELECT * FROM requestrate WHERE ip = ?", ip)
-        if not row[1].isEmptyOrWhitespace():
+        if db.getValue(sql"SELECT EXISTS(SELECT NULL FROM ip WHERE endpoint = ? AND address = ?)", endpoint, ip).parseBool():
 
-            return RequestRate(
-                ip : row[1],
-                calls : row[2].parseInt(),
+            let epoch = int(epochTime())
+            db.exec(sql "UPDATE ip SET calls = ?, cyclepoch = ?, lastcalled = ? WHERE address = ?", 2, epoch, epoch, ip)
+
+            let row = db.getRow(sql "SELECT address, calls, cyclepoch, lastcalled FROM ip WHERE address = ?;", ip)
+            return (
+                calls : row[1].parseInt(), 
+                cyclepoch : row[2].parseInt(), 
                 lastcalled : row[3].parseInt()
             )
 
-    addIpToReqRate(ip)
-
-proc rateStatus*(ip : string, rate, freq : int) : tuple[status : RateStatus, calls : int] =
+proc rateStatus*(endpoint, ip : string, rate, freq : int) : tuple[status : RateStatus, calls, resetime : int] =
 
     let 
-        reqRate = reqRate(ip)
+        reqRate : tuple[calls, cyclepoch, lastcalled : int] = block:
+
+            var 
+                reqRate : tuple[calls, cyclepoch, lastcalled : int]
+                addip : bool = true
+            {.cast(gcsafe).}:
+
+                withLock dbWriteLock:
+
+                    if db.getValue(sql "SELECT EXISTS(SELECT NULL FROM ip WHERE endpoint = ? AND address = ?)", endpoint, ip).parseBool():
+                        
+                        addip = false
+
+                        let row = db.getRow(sql "SELECT calls, cyclepoch, lastcalled FROM ip WHERE address = ?;", ip)
+                        reqRate = (row[0].parseInt(), row[1].parseInt(), row[2].parseInt())
+
+            if addip:
+
+                reqRate = addIpToReqRate(endpoint, ip)
+
+            reqRate
+
         epoch = int(epochTime())
 
-    if reqRate.calls >= rate and reqRate.lastcalled + freq >= epoch:
+    if reqRate.cyclepoch + freq <= epoch:
+
+        return (Expired, reqRate.calls, reqRate.cyclepoch + freq)
+
+    elif reqRate.calls > rate and reqRate.cyclepoch + freq >= epoch:
         ## checks if ip has surpassed request limit
         
-        return (Exceeded, reqRate.calls)
-
-    elif reqRate.lastcalled + freq < epoch:
-
-        return (Expired, reqRate.calls)
+        return (Exceeded, reqRate.calls, reqRate.cyclepoch + freq)
 
     else:
 
-        return (NotExceeded, reqRate.calls)
+        return (NotExceeded, reqRate.calls, reqRate.cyclepoch + freq)
 
 proc clean() {.async.} =
     ## clear stale ip rate records
@@ -127,8 +141,8 @@ proc clean() {.async.} =
         await sleepAsync(cleanerInterval * 1000)
         withLock dbWriteLock:
 
-            for row in db.getAllRows(sql "SELECT ip FROM requestrate WHERE lastcalled < ?", epochTime().int - cleanerInterval):
+            for row in db.getAllRows(sql "SELECT address FROM ip WHERE lastcalled < ?", epochTime().int - cleanerInterval):
 
-                db.exec(sql "DELETE FROM requestrate WHERE ip = ?", row[0])
+                db.exec(sql "DELETE FROM ip WHERE address = ?", row[0])
 
 asyncCheck clean()

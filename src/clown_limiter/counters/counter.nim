@@ -8,80 +8,113 @@ from std / sugar import `=>`
 
 var 
     writeLock : Lock
-    tracker {.guard : writeLock.} : Table[string, tuple[calls, lastcalled : int]] ## to store ip address and number of calls made by address
+    tracker {.guard : writeLock.} : Table[string, Table[string, tuple[calls, cyclepoch, lastcalled : int]]] ## table of regex endpoints containing 
+    ## a table of ips which contains the tracker data
 
 initLock(writeLock)
 addExitProc(() => (deinitLock(writeLock))) ## deinit locks on exit
-proc addIpToReqRate*(ip : string) {.gcsafe.} =
+proc addIpToReqRate*(endpoint, ip : string) : tuple[calls, cyclepoch, lastcalled : int] {.gcsafe.} =
 
     {.cast(gcsafe).}:
 
         withLock writeLock:
 
-            if ip in tracker:
+            if endpoint notin tracker:
 
-                return
+                let 
+                    epoch = int(epochTime())
+                    ipData = {ip : (calls : 1, cyclepoch : epoch, lastcalled : epoch)}.toTable()
 
-            tracker[ip] = (calls : 1, lastcalled : int(epochTime()))
+                tracker[endpoint] = ipData
+                result = ipData[ip]
 
-proc recordReqRate*(ip : string, calls : int) {.gcsafe.} =
+            else:
+
+                if ip notin tracker[endpoint]:
+
+                    let epoch = int(epochTime())
+                    tracker[endpoint][ip] = (calls : 1, cyclepoch : epoch, lastcalled : epoch)
+
+                    result = tracker[endpoint][ip]
+
+proc removeEndpoint*(endpoint : string) {.gcsafe.} =
 
     {.cast(gcsafe).}:
 
         withLock writeLock:
 
-            if ip in tracker:
+            if tracker.hasKey(endpoint):
 
-                tracker[ip].calls = calls + 1
-                tracker[ip].lastcalled = int(epochTime())
+                del tracker, endpoint
 
-proc resetReqRate*(ip : string) : tuple[calls, lastcalled : int] {.discardable, gcsafe.} =
+proc recordReqRate*(endpoint, ip : string, calls : int) {.gcsafe.} =
 
     {.cast(gcsafe).}:
 
         withLock writeLock:
-        
-            if ip in tracker:
 
-                tracker[ip].calls = 1
-                tracker[ip].lastcalled = int(epochTime())
+            if endpoint in tracker:
 
-                return (calls : 1, lastcalled : tracker[ip].lastcalled)
+                if ip in tracker[endpoint]:
 
-proc rateStatus*(ip : string, rate, freq : int) : tuple[status : RateStatus, calls : int] {.gcsafe.} =
+                    tracker[endpoint][ip].calls = calls + 1
+                    tracker[endpoint][ip].lastcalled = int(epochTime())
 
+proc resetReqRate*(endpoint, ip : string) : tuple[calls, cyclepoch, lastcalled : int] {.discardable, gcsafe.} =
+
+    {.cast(gcsafe).}:
+
+        withLock writeLock:
+
+            if endpoint in tracker:
+
+                if ip in tracker[endpoint]:
+                    
+                    let epoch = int(epochTime())
+
+                    tracker[endpoint][ip].calls = 2 ## it's 2 because this is called after rateStatus returns expire
+                    ## the request on which rateStatus is called will then be the 1
+                    tracker[endpoint][ip].cyclepoch = epoch
+                    tracker[endpoint][ip].lastcalled = epoch
+
+                    return (calls : 2, cyclepoch : epoch, lastcalled : epoch)
+
+proc rateStatus*(endpoint, ip : string, rate, freq : int) : tuple[status : RateStatus, calls, resetime : int] {.gcsafe.} =
+    
     let 
-        reqRate : tuple[calls, lastcalled : int] = block:
+        reqRate : tuple[calls, cyclepoch, lastcalled : int] = block:
 
             var 
-                reqRate : tuple[calls, lastcalled : int] = (1, 0)
+                reqRate : tuple[calls, cyclepoch, lastcalled : int]
                 addip : bool = true
             {.cast(gcsafe).}:
 
                 withLock writeLock:
 
-                    if ip in tracker:
+                    if endpoint in tracker:
+                        
+                        if ip in tracker[endpoint]:
 
-                        addip = false
-                        reqRate = tracker[ip]
+                            addip = false
+                            reqRate = tracker[endpoint][ip]
 
             if addip:
 
-                addIpToReqRate(ip)
+                reqRate = addIpToReqRate(endpoint, ip)
 
             reqRate
 
         epoch = int(epochTime())
+    
+    if reqRate.cyclepoch + freq <= epoch:
 
-    if reqRate.calls >= rate and reqRate.lastcalled + freq >= epoch:
+        return (Expired, reqRate.calls, reqRate.cyclepoch + freq)
+
+    elif reqRate.calls > rate and reqRate.cyclepoch + freq >= epoch:
         ## checks if ip has surpassed request limit
         
-        return (Exceeded, reqRate.calls)
-
-    elif reqRate.lastcalled + freq < epoch:
-
-        return (Expired, reqRate.calls)
+        return (Exceeded, reqRate.calls, reqRate.cyclepoch + freq)
 
     else:
-
-        return (NotExceeded, reqRate.calls)
+        
+        return (NotExceeded, reqRate.calls, reqRate.cyclepoch + freq)
