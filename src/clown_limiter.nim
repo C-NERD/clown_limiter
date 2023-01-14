@@ -49,8 +49,10 @@
 import jester
 import clown_limiter / datatype
 import std / [locks, exitprocs]
-from std / re import re, contains, Regex
+from std / nre import re, contains, Regex
 from std / sugar import `=>`
+from std / options import isSome, get, some
+from std / strformat import fmt
 
 when not defined(useSqliteCounter):
     ## when not specified to use in memory sqlite to store tracking data
@@ -68,33 +70,42 @@ type
 
     LimitRule* = tuple[pattern : Regex, rate, freq : int]
 
-export datatype, re, locks
+export datatype, locks, isSome, get, some, fmt, nre
 
 var 
     ruleLock* : Lock
-    clownLimiterDataDoNotTouch* {.guard : ruleLock.} : seq[LimitRule] = @[
-        (re".+", 50, 60)
-    ] ## Do not mutate this variable directly 👀👀, but instead use the addLimiterEndpoints proc
+    clownLimiterDataDoNotTouch* {.guard : ruleLock.} : seq[LimitRule] ## Do not mutate this variable directly 👀👀, 
+    ## but instead use the addLimiterEndpoints proc
 
 initLock(ruleLock)
 addExitProc(() {.noconv.} => (deinitLock(ruleLock)))
 proc addLimiterEndpoints*(rules : seq[LimitRule]) {.gcsafe.} =
     ## sets the data for api endpoints to be rate limited.
+    ## makes sure that there are no multiple rules for a single regex endpoint
     
     {.cast(gcsafe).}:
 
         withLock ruleLock:
 
-            clownLimiterDataDoNotTouch = rules
+            var sortedRules : seq[LimitRule]
+            for rule in rules:
+
+                for sortrule in sortedRules:
+
+                    if sortrule.pattern != rule.pattern:
+
+                        sortedRules.add(sortrule)
+
+            clownLimiterDataDoNotTouch = sortedRules
 
 proc addLimiterEndpoints*(rule : LimitRule) {.gcsafe.} =
     ## adds rule for api endpoints to be rate limited.
-    ## if a rule for an endpoint already exists, it's replaced
+    ## makes sure that there are no multiple rules for a single regex endpoint
     
     {.cast(gcsafe).}:
 
         withLock ruleLock:
-
+            
             var insertPos : int = -1
             for pos in 0..<clownLimiterDataDoNotTouch.len():
 
@@ -112,7 +123,7 @@ proc addLimiterEndpoints*(rule : LimitRule) {.gcsafe.} =
 
 router clown_limiter:
 
-    before re".+":
+    before:
         ## rate limiting endpoint
         
         var rules : seq[LimitRule]
@@ -125,6 +136,7 @@ router clown_limiter:
         var 
             checkRate : bool = false
             rate, freq : int
+            endpoint : string
         let url = request.path()
         for rule in rules:
 
@@ -133,14 +145,15 @@ router clown_limiter:
                 checkRate = true
                 rate = rule.rate
                 freq = rule.freq
+                endpoint = rule.pattern.pattern
                 break
-
+        
         if checkRate:
-
+            
             let 
                 ip = request.ip()
-                rateinfo = ip.rateStatus(rate, freq)
-
+                rateinfo = rateStatus(endpoint, ip, rate, freq)
+            
             case rateinfo.status
 
             of Exceeded:
@@ -149,8 +162,16 @@ router clown_limiter:
 
             of NotExceeded:
 
-                ip.recordReqRate(rateinfo.calls)
+                recordReqRate(endpoint, ip, rateinfo.calls)
 
             of Expired:
 
-                ip.resetReqRate()
+                resetReqRate(endpoint, ip)
+
+            if result.headers.isSome():
+
+                result.headers.get().add ("X-RateLimit-Limit", fmt"{rate}/{freq}s")
+                result.headers.get().add ("X-RateLimit-Remaining", $(rate - rateinfo.calls))
+                #result.headers.get().add ("X-RateLimit-Reset", $rateinfo.resetime)
+
+        
